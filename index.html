@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>TireTracker</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#1D9E75" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="TireTracker" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f5f3; color: #1a1a1a; min-height: 100vh; }
+    #root { max-width: 430px; margin: 0 auto; background: #fff; min-height: 100vh; }
+
+    input, select, textarea {
+      display: block; width: 100%; padding: 10px 12px; font-size: 15px;
+      border: 1px solid #d1d1cc; border-radius: 10px; background: #fafaf8;
+      color: #1a1a1a; outline: none; margin-bottom: 10px;
+    }
+    input:focus, select:focus { border-color: #1D9E75; box-shadow: 0 0 0 3px #1D9E7522; }
+
+    button {
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 11px 18px; font-size: 14px; font-weight: 500;
+      border: 1px solid #d1d1cc; border-radius: 10px; background: #fff;
+      color: #1a1a1a; cursor: pointer; transition: background 0.15s, transform 0.1s;
+    }
+    button:active { transform: scale(0.97); background: #f0f0ee; }
+
+    label { display: block; font-size: 13px; color: #666; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script>
+const { useState, useEffect, useRef } = React;
+
+const STORAGE_KEY = "tire_tracker_v1";
+const DEFAULT_ROTATION_KM = 10000;
+const DEFAULT_MAX_KM = 45000;
+
+function loadData() {
+  try { const r = localStorage.getItem(STORAGE_KEY); return r ? JSON.parse(r) : { vehicles: [], activeVehicleId: null }; }
+  catch { return { vehicles: [], activeVehicleId: null }; }
+}
+function saveData(d) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(d)); } catch {} }
+
+function TireCanvas({ pct, size = 110 }) {
+  const ref = useRef();
+  useEffect(() => {
+    const c = ref.current; if (!c) return;
+    const ctx = c.getContext("2d");
+    const cx = size/2, cy = size/2, R = size*0.42, r = size*0.24;
+    const dpr = window.devicePixelRatio || 1;
+    c.width = size*dpr; c.height = size*dpr;
+    c.style.width = size+"px"; c.style.height = size+"px";
+    ctx.scale(dpr, dpr); ctx.clearRect(0,0,size,size);
+    const color = pct>=80?"#E24B4A":pct>=50?"#EF9F27":"#1D9E75";
+    const bg = pct>=80?"#FCEBEB":pct>=50?"#FAEEDA":"#E1F5EE";
+    ctx.beginPath(); ctx.arc(cx,cy,R+6,0,Math.PI*2); ctx.fillStyle="#2C2C2A"; ctx.fill();
+    for(let i=0;i<16;i++){const a=(i/16)*Math.PI*2;ctx.beginPath();ctx.arc(cx,cy,R+4,a,a+Math.PI/18);ctx.arc(cx,cy,R-2,a+Math.PI/18,a,true);ctx.fillStyle=i%2===0?"#444441":"#2C2C2A";ctx.fill();}
+    ctx.beginPath();ctx.arc(cx,cy,R,0,Math.PI*2);ctx.strokeStyle="#D3D1C7";ctx.lineWidth=10;ctx.stroke();
+    const start=-Math.PI/2;ctx.beginPath();ctx.arc(cx,cy,R,start,start+(pct/100)*Math.PI*2);ctx.strokeStyle=color;ctx.lineWidth=10;ctx.lineCap="round";ctx.stroke();
+    ctx.beginPath();ctx.arc(cx,cy,r+4,0,Math.PI*2);ctx.fillStyle=bg;ctx.fill();
+    for(let i=0;i<5;i++){const a=(i/5)*Math.PI*2;ctx.beginPath();ctx.moveTo(cx+Math.cos(a)*8,cy+Math.sin(a)*8);ctx.lineTo(cx+Math.cos(a)*(r-4),cy+Math.sin(a)*(r-4));ctx.strokeStyle=color+"55";ctx.lineWidth=3;ctx.lineCap="round";ctx.stroke();}
+    ctx.beginPath();ctx.arc(cx,cy,7,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
+    ctx.font=`500 ${size*0.16}px -apple-system,sans-serif`;ctx.fillStyle=color;ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(pct+"%",cx,cy);
+  }, [pct, size]);
+  return React.createElement("canvas", { ref });
+}
+
+function App() {
+  const [data, setData] = useState(loadData);
+  const [view, setView] = useState(() => loadData().vehicles.length===0?"add_vehicle":"dashboard");
+  const [form, setForm] = useState({});
+  const [rotForm, setRotForm] = useState({});
+  const [showRot, setShowRot] = useState(false);
+
+  const persist = d => { setData(d); saveData(d); };
+  const active = data.vehicles.find(v=>v.id===data.activeVehicleId)||data.vehicles[0];
+  const driven = active ? active.currentKm-active.mountKm : 0;
+  const pct = active ? Math.min(100,Math.round((driven/(active.maxKm||DEFAULT_MAX_KM))*100)) : 0;
+  const toRot = active ? Math.max(0,(active.rotationKm||DEFAULT_ROTATION_KM)-(active.currentKm-(active.lastRotationKm??active.mountKm))) : 0;
+  const rotNeeded = toRot<=0;
+  const barColor = pct>=80?"#E24B4A":pct>=50?"#EF9F27":"#1D9E75";
+
+  const e = React.createElement;
+  const inp = (field, placeholder, type="text") =>
+    e("input",{type,placeholder,value:form[field]||"",onChange:ev=>setForm(f=>({...f,[field]:ev.target.value}))});
+
+  function VehicleForm({title,onSave,onCancel}){
+    return e("div",{style:{padding:"1rem"}},
+      e("h2",{style:{fontSize:18,fontWeight:500,marginBottom:16}},title),
+      e("label",null,"Nome veicolo *"), inp("name","es. Fiat Punto"),
+      e("label",null,"Targa *"), inp("plateNum","es. AB123CD"),
+      e("label",null,"Marca/modello gomme"), inp("tireModel","es. Michelin Pilot Sport 4"),
+      e("label",null,"Tipo gomme"),
+      e("select",{value:form.tireType||"estive",onChange:ev=>setForm(f=>({...f,tireType:ev.target.value}))},
+        e("option",{value:"estive"},"Estive"),e("option",{value:"invernali"},"Invernali"),e("option",{value:"4stagioni"},"4 stagioni")),
+      e("label",null,"Data montaggio"), inp("mountDate","","date"),
+      e("label",null,"Km al montaggio"), inp("mountKm","es. 85000","number"),
+      form._edit && e(React.Fragment,null,e("label",null,"Km attuali"),inp("currentKm","es. 90000","number")),
+      e("label",null,"Vita massima (km)"), inp("maxKm","Default: 45000","number"),
+      e("label",null,"Intervallo rotazione (km)"), inp("rotationKm","Default: 10000","number"),
+      e("div",{style:{display:"flex",gap:8,marginTop:8}},
+        e("button",{onClick:onSave,style:{flex:1}},"Salva"),
+        onCancel&&e("button",{onClick:onCancel,style:{flex:1}},"Annulla")
+      )
+    );
+  }
+
+  if(view==="add_vehicle") return e(VehicleForm,{
+    title: data.vehicles.length===0?"Aggiungi il tuo primo veicolo":"Nuovo veicolo",
+    onSave:()=>{
+      if(!form.name||!form.plateNum)return;
+      const id=Date.now().toString();
+      const v={id,name:form.name,plate:form.plateNum,tireModel:form.tireModel||"",tireType:form.tireType||"estive",mountKm:parseInt(form.mountKm)||0,currentKm:parseInt(form.mountKm)||0,maxKm:parseInt(form.maxKm)||DEFAULT_MAX_KM,rotationKm:parseInt(form.rotationKm)||DEFAULT_ROTATION_KM,lastRotationKm:parseInt(form.mountKm)||0,mountDate:form.mountDate||new Date().toISOString().split("T")[0],rotations:[]};
+      persist({vehicles:[...data.vehicles,v],activeVehicleId:id});
+      setForm({});setView("dashboard");
+    },
+    onCancel:data.vehicles.length>0?()=>{setForm({});setView("dashboard");}:null
+  });
+
+  if(view==="edit_vehicle") return e(VehicleForm,{
+    title:"Modifica veicolo",
+    onSave:()=>{
+      if(!form.name||!form.plateNum)return;
+      persist({...data,vehicles:data.vehicles.map(v=>v.id===active.id?{...v,name:form.name,plate:form.plateNum,tireModel:form.tireModel??v.tireModel,tireType:form.tireType??v.tireType,mountDate:form.mountDate??v.mountDate,mountKm:parseInt(form.mountKm)||v.mountKm,currentKm:parseInt(form.currentKm)||v.currentKm,maxKm:parseInt(form.maxKm)||v.maxKm,rotationKm:parseInt(form.rotationKm)||v.rotationKm}:v)});
+      setForm({});setView("dashboard");
+    },
+    onCancel:()=>{setForm({});setView("dashboard");}
+  });
+
+  if(view==="update_km") return e("div",{style:{padding:"1rem"}},
+    e("h2",{style:{fontSize:18,fontWeight:500,marginBottom:4}},"Aggiorna chilometraggio"),
+    e("p",{style:{fontSize:13,color:"#888",marginBottom:16}},"Km attuali: "+active.currentKm.toLocaleString("it-IT")+" km"),
+    e("input",{type:"number",placeholder:"Nuovo chilometraggio",value:form.newKm||"",onChange:ev=>setForm(f=>({...f,newKm:ev.target.value})),style:{marginBottom:16}}),
+    e("div",{style:{display:"flex",gap:8}},
+      e("button",{onClick:()=>{const k=parseInt(form.newKm);if(!k||k<=active.mountKm)return;persist({...data,vehicles:data.vehicles.map(v=>v.id===active.id?{...v,currentKm:k}:v)});setForm({});setView("dashboard");},style:{flex:1}},"Aggiorna"),
+      e("button",{onClick:()=>setView("dashboard"),style:{flex:1}},"Annulla")
+    )
+  );
+
+  const card = (children, extra={}) => e("div",{style:{background:"#fff",border:"1px solid #e8e8e4",borderRadius:14,padding:"1rem 1.25rem",marginBottom:12,...extra}},children);
+
+  return e("div",{style:{padding:"1rem"}},
+    e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}},
+      e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+        e(TireCanvas,{pct,size:44}),
+        e("div",null,
+          e("h2",{style:{fontSize:18,fontWeight:600,margin:0}},"TireTracker"),
+          e("p",{style:{fontSize:12,color:"#888",margin:0}},"Gestione usura pneumatici")
+        )
+      ),
+      e("button",{onClick:()=>{setForm({});setView("add_vehicle");},style:{fontSize:13,padding:"6px 12px"}},"+Veicolo")
+    ),
+
+    data.vehicles.length>1 && e("select",{value:active?.id||"",onChange:ev=>persist({...data,activeVehicleId:ev.target.value}),style:{marginBottom:16}},
+      data.vehicles.map(v=>e("option",{key:v.id,value:v.id},v.name+" — "+v.plate))
+    ),
+
+    active && e(React.Fragment,null,
+      card(e("div",{style:{display:"flex",gap:16,alignItems:"center"}},
+        e(TireCanvas,{pct,size:110}),
+        e("div",{style:{flex:1}},
+          e("div",{style:{fontWeight:600,fontSize:15}},active.name),
+          e("div",{style:{fontSize:12,color:"#888",marginBottom:4}},active.plate),
+          active.tireModel&&e("div",{style:{fontSize:12,color:"#888",marginBottom:6}},active.tireModel),
+          e("span",{style:{fontSize:11,background:"#f0f0ee",color:"#666",padding:"2px 8px",borderRadius:8}},active.tireType),
+          e("div",{style:{marginTop:10,fontSize:13}},
+            e("span",{style:{color:"#888"}},"Usura: "),
+            e("span",{style:{fontWeight:600,color:barColor}},pct+"%"),
+            pct>=80&&e("div",{style:{fontSize:12,color:"#E24B4A",marginTop:3}},"⚠ Considera la sostituzione")
+          )
+        )
+      )),
+
+      e("div",{style:{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginBottom:12}},
+        ...[
+          {label:"Km percorsi",val:driven.toLocaleString("it-IT")+" km"},
+          {label:"Km attuali",val:active.currentKm.toLocaleString("it-IT")+" km"},
+          {label:"Montate il",val:active.mountDate},
+          {label:"Vita max",val:(active.maxKm||DEFAULT_MAX_KM).toLocaleString("it-IT")+" km"},
+        ].map(s=>e("div",{key:s.label,style:{background:"#f5f5f3",borderRadius:10,padding:"10px 12px"}},
+          e("div",{style:{fontSize:11,color:"#888",marginBottom:2}},s.label),
+          e("div",{style:{fontSize:14,fontWeight:600}},s.val)
+        ))
+      ),
+
+      e("div",{style:{background:rotNeeded?"#FCEBEB":"#f5f5f3",border:`1px solid ${rotNeeded?"#F09595":"#e8e8e4"}`,borderRadius:10,padding:"10px 14px",marginBottom:12}},
+        e("div",{style:{fontSize:12,color:rotNeeded?"#A32D2D":"#888",marginBottom:2}},rotNeeded?"⚠ Rotazione necessaria ora!":"Prossima rotazione"),
+        e("div",{style:{fontSize:15,fontWeight:600,color:rotNeeded?"#A32D2D":"#1a1a1a"}},rotNeeded?"Scaduta":toRot.toLocaleString("it-IT")+" km rimanenti"),
+        e("div",{style:{fontSize:11,color:"#888",marginTop:2}},"Ogni "+(active.rotationKm||DEFAULT_ROTATION_KM).toLocaleString("it-IT")+" km")
+      ),
+
+      e("div",{style:{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginBottom:12}},
+        e("button",{onClick:()=>{setForm({});setView("update_km");},style:{padding:"10px 0",fontSize:13}},"Aggiorna km"),
+        e("button",{onClick:()=>{setForm({_edit:true,name:active.name,plateNum:active.plate,tireModel:active.tireModel,tireType:active.tireType,mountDate:active.mountDate,mountKm:String(active.mountKm),currentKm:String(active.currentKm),maxKm:String(active.maxKm),rotationKm:String(active.rotationKm)});setView("edit_vehicle");},style:{padding:"10px 0",fontSize:13}},"Modifica dati"),
+        e("button",{onClick:()=>setShowRot(true),style:{padding:"10px 0",fontSize:13,gridColumn:"1 / -1",...(rotNeeded?{borderColor:"#E24B4A",color:"#A32D2D"}:{})}},"Registra rotazione")
+      ),
+
+      showRot&&card(e(React.Fragment,null,
+        e("div",{style:{fontWeight:600,fontSize:15,marginBottom:12}},"Registra rotazione gomme"),
+        e("label",null,"Data"),
+        e("input",{type:"date",value:rotForm.date||new Date().toISOString().split("T")[0],onChange:ev=>setRotForm(f=>({...f,date:ev.target.value}))}),
+        e("label",null,"Km attuali"),
+        e("input",{type:"number",value:rotForm.km!==undefined?rotForm.km:active.currentKm,onChange:ev=>setRotForm(f=>({...f,km:ev.target.value}))}),
+        e("label",null,"Note"),
+        e("input",{type:"text",placeholder:"es. Ant-Post + gonfiaggio",value:rotForm.note||"",onChange:ev=>setRotForm(f=>({...f,note:ev.target.value}))}),
+        e("div",{style:{display:"flex",gap:8,marginTop:4}},
+          e("button",{onClick:()=>{const km=parseInt(rotForm.km)||active.currentKm;const rot={date:rotForm.date||new Date().toISOString().split("T")[0],km,note:rotForm.note||"Rotazione completata"};persist({...data,vehicles:data.vehicles.map(v=>v.id===active.id?{...v,lastRotationKm:km,rotations:[...(v.rotations||[]),rot]}:v)});setRotForm({});setShowRot(false);},style:{flex:1}},"Salva"),
+          e("button",{onClick:()=>setShowRot(false),style:{flex:1}},"Annulla")
+        )
+      )),
+
+      active.rotations?.length>0&&card(e(React.Fragment,null,
+        e("div",{style:{fontWeight:600,fontSize:14,marginBottom:10}},"Storico rotazioni"),
+        ...[...active.rotations].reverse().map((r,i)=>e("div",{key:i,style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:i<active.rotations.length-1?"1px solid #e8e8e4":"none"}},
+          e("div",null,e("div",{style:{fontSize:13,fontWeight:600}},r.date),e("div",{style:{fontSize:12,color:"#888"}},r.note)),
+          e("div",{style:{fontSize:13,color:"#888"}},r.km.toLocaleString("it-IT")+" km")
+        ))
+      )),
+
+      e("button",{onClick:()=>{if(confirm("Eliminare "+active.name+"?")){{const veh=data.vehicles.filter(v=>v.id!==active.id);persist({vehicles:veh,activeVehicleId:veh[0]?.id||null});if(veh.length===0)setView("add_vehicle");}}},style:{width:"100%",fontSize:13,color:"#A32D2D",borderColor:"#F09595"}},"Elimina veicolo")
+    )
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+
+if("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("/tiretracker/sw.js"));
+}
+</script>
+</body>
+</html>
